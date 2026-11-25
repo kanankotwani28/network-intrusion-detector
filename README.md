@@ -71,15 +71,19 @@ the single source of truth every other module imports from.
 
 ```
 src/nids/
-  config/        Pydantic-validated experiment.yaml loader
-  data/          ingestion, label mapping, validation, dedup, sampling, split, schema, data identities
-  features/      canonical feature-group lists; (ratios.py added in Phase 4)
-  utils/         logging, reproducibility (run_config.json), small IO helpers
-tests/           pytest suite, synthetic data only (no 18.9M-row file needed)
-configs/         configs/experiment.yaml — every tunable in one place
-scripts/         run_pipeline.py (Phase 1); more added per phase
-data/            raw/ (you place the CSV here) · interim/ · processed/ (parquet; gitignored)
-artifacts/       models, metrics, plots, reports, run_config.json (gitignored)
+  config/           Pydantic-validated experiment.yaml loader
+  data/             ingestion, label mapping, validation, dedup, sampling, split, schema, data identities
+  features/         canonical feature-group lists, engineered timing-invariant ratios
+  perturbation/      consistency-preserving pacing engine + its 9-invariant verifier
+  models/           shared LightGBM wrapper, M3/M4 augmentation, M5 SHAP selection
+  evaluation/       metrics, attack-evasion-rate, 5-seed mean+/-std aggregation
+  explainability/   non-circular SHAP attribution-drift audit
+  utils/            logging, reproducibility (run_config.json), small IO helpers
+tests/              pytest suite, synthetic data only (no 18.9M-row file needed)
+configs/            experiment.yaml -- every tunable in one place
+scripts/            run_pipeline.py / run_phase{2,3,4,5}.py / generate_report.py
+data/               raw/ (dataset here) . interim/ . processed/ (parquet; gitignored)
+artifacts/          models, metrics, plots, reports, run_config.json (gitignored)
 ```
 
 Fixed pipeline order (never reordered, and enforced by the call sequence in
@@ -244,12 +248,32 @@ contingency rule.
 ## 8. Running things
 
 ```bash
-# Phase 1: ingest, validate, dedup, sample, split (needs the raw CSV, see §7)
+# Phase 1: ingest, validate, dedup, sample, split
 python scripts/run_pipeline.py --config configs/experiment.yaml
 
-# Tests (synthetic data only, no raw CSV needed)
+# Phase 2: M1 baseline, M2 ablation, M1 feature importance, M5 SHAP selection (frozen)
+python scripts/run_phase2.py --config configs/experiment.yaml
+
+# Phase 3: perturbation engine across all 5 seeds + consistency verification
+python scripts/run_phase3.py --config configs/experiment.yaml
+
+# Phase 4: train M3 (noise), M4 (adversarial), M5 (hybrid) at seed 42, verify acceptance criteria
+python scripts/run_phase4.py --config configs/experiment.yaml
+
+# Phase 5: full 5-seed evaluation of all 5 models + non-circular SHAP drift audit
+python scripts/run_phase5.py --config configs/experiment.yaml
+
+# Phase 6: assemble results_summary.md from the artifacts above
+python scripts/generate_report.py
+
+# Tests (synthetic data only, no raw dataset needed) -- 94 tests
 pytest
 ```
+
+Each script is idempotent and reads/writes `artifacts/run_config.json`
+incrementally, so phases can be re-run independently once their inputs
+exist. See `artifacts/reports/results_summary.md` for the full results
+after running Phases 1-6.
 
 ## 9. Current status (updated as phases complete)
 
@@ -288,11 +312,38 @@ pytest
         check — both are handled per the proposal's own documented
         fallback (hold the column fixed, report the failure), not patched
         around.
-- [ ] Phase 2 — M1 baseline / M2 no-timing ablation.
-- [ ] Phase 3 — Consistency-preserving perturbation engine.
-- [ ] Phase 4 — M3 noise / M4 adversarial / M5 SHAP-guided hybrid.
-- [ ] Phase 5 — Five-seed evaluation, AER, SHAP drift audit.
-- [ ] Phase 6 — Final report.
+- [x] **Phase 2 — M1/M2 + M5 SHAP selection.** M1 and M2 trained on the
+      real split; identical clean performance (macro-F1 0.9974 for both),
+      confirming structural features alone fully separate the 4 classes
+      here. SHAP flagged `FLOW_DURATION_MILLISECONDS` and `DURATION_IN` as
+      fragile (>=2.5% importance share); M5's 46-feature layer frozen to
+      `artifacts/data/m5_feature_list.json`.
+- [x] **Phase 3 — Perturbation engine, 5 seeds.** All 450 consistency
+      checks (45 invariants x 5 seeds x 2 regimes) pass. **AER = 0.00%**
+      for M1 and M2, every class, every seed, both moderate and OOD
+      regimes — see §7a and the Results Summary for why.
+- [x] **Phase 4 — M3/M4/M5 trained and verified.** Augmentation pool
+      sizes exact, M5 uses the frozen feature list, all three share
+      M1/M2's hyperparameters and split. Clean macro-F1 0.9999 for all
+      three. (Found and fixed along the way: a pathological outlier in
+      `SRC_TO_DST_SECOND_BYTES` overflows naive `std()` to `inf`, now
+      guarded in the Gaussian-noise augmenter.)
+- [x] **Phase 5 — Full 5-seed evaluation + SHAP drift audit.** All 5
+      models retrained per seed; clean/moderate/OOD metrics, AER by
+      class, mean+/-std aggregation, confusion matrices and comparison
+      plots all written from real runs. **AER stays 0.00% for every
+      model** (M3/M4/M5 had nothing to recover from). The non-circular
+      SHAP audit (M1 vs M4 vs M5, ground-truth class, OOD, seed 42) is
+      the project's most interesting positive finding: M1 attributes
+      16.8% of its prediction weight to fragile timing/rate features on
+      clean data; M4 only 3.8%; M5's remaining unflagged timing features
+      only 2.7% (plus 30.7% routed onto the engineered invariant ratios).
+      Adversarial hardening and hybrid feature engineering measurably
+      shift predictive weight off timing features, independent of
+      whether the specific evasion attack succeeds on this dataset.
+- [x] **Phase 6 — Final report.** `scripts/generate_report.py` assembles
+      `artifacts/reports/results_summary.md` answering all 5 research
+      questions directly from the artifact files (no fabricated numbers).
 
 ## 10. Limitations (carried from the proposal, Section 12)
 
