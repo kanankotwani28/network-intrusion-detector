@@ -5,7 +5,14 @@
 run_name: final
 
 paths:
-  raw_dataset: data/raw/NF-CSE-CIC-IDS2018-v2.csv   # place the downloaded CSV here (or edit)
+  # NF-CSE-CIC-IDS2018-v2, downloaded 2026-11-25 from the Kaggle mirror
+  # https://www.kaggle.com/datasets/dhoogla/nfcsecicids2018v2 (a cleaned
+  # republish of the official UQ/Sarhan-et-al. dataset: same 43-feature
+  # schema and all 15 Appendix-B Attack label strings verified identical,
+  # but with IPV4_SRC_ADDR/IPV4_DST_ADDR stripped and exact-duplicate flows
+  # already removed upstream -- see README Section 7 for the full
+  # provenance note and the resulting row-count discrepancy).
+  raw_dataset: data/raw/NF-CSE-CIC-IDS2018-V2.parquet
   interim_dir: data/interim
   processed_dir: data/processed
   artifacts_dir: artifacts

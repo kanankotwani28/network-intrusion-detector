@@ -75,9 +75,27 @@ class Pass1Result:
     unknown_labels: set[str] = field(default_factory=set)
 
 
-def _read_chunks(csv_path: Path, chunksize: int, usecols: list[str] | None = None) -> Iterator[pd.DataFrame]:
-    reader = pd.read_csv(csv_path, chunksize=chunksize, usecols=usecols, low_memory=False)
-    yield from reader
+def _read_chunks(data_path: Path, chunksize: int, usecols: list[str] | None = None) -> Iterator[pd.DataFrame]:
+    """Stream a dataset file in row chunks, regardless of on-disk format.
+
+    Supports CSV (``pandas.read_csv(chunksize=...)``) and Parquet. A Parquet
+    file need not contain multiple row groups to be read memory-safely:
+    :meth:`pyarrow.parquet.ParquetFile.iter_batches` decodes a row group
+    incrementally in ``batch_size``-row slices, so even the single
+    641MB/17M-row file this project uses is never materialised whole.
+    """
+    suffix = data_path.suffix.lower()
+    if suffix == ".parquet":
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(data_path)
+        for batch in pf.iter_batches(batch_size=chunksize, columns=usecols):
+            yield batch.to_pandas()
+    elif suffix in (".csv", ".txt", ""):
+        reader = pd.read_csv(data_path, chunksize=chunksize, usecols=usecols, low_memory=False)
+        yield from reader
+    else:
+        raise ValueError(f"Unsupported dataset file format: {suffix!r} ({data_path})")
 
 
 def run_pass1(

@@ -155,12 +155,19 @@ def validate_chunk(chunk: pd.DataFrame, codes: np.ndarray) -> tuple[pd.DataFrame
     flow = v["FLOW_DURATION_MILLISECONDS"].to_numpy()
     d_in = v["DURATION_IN"].to_numpy()
     d_out = v["DURATION_OUT"].to_numpy()
+    wrap_lo = TIMER_WRAP_MS - TIMER_WRAP_MARGIN_MS
     flag_defs = {
         "zero_flow_duration": flow == 0,
+        "zero_duration_in": d_in == 0,
+        "zero_duration_out": d_out == 0,
         "direction_duration_exceeds_flow": (d_in > flow + 1.0) | (d_out > flow + 1.0),
-        "near_32bit_timer_wrap": np.any(
-            v[DURATION_FEATURES].to_numpy() >= TIMER_WRAP_MS - TIMER_WRAP_MARGIN_MS, axis=1
-        ),
+        # Reported per column, not combined: FLOW_DURATION_MILLISECONDS is a
+        # known nProbe 32-bit microsecond-counter overflow in this dataset
+        # and wraps far more often than DURATION_IN/DURATION_OUT, so an
+        # "any of the three" flag would hide that asymmetry.
+        "near_32bit_timer_wrap_flow_duration": flow >= wrap_lo,
+        "near_32bit_timer_wrap_duration_in": d_in >= wrap_lo,
+        "near_32bit_timer_wrap_duration_out": d_out >= wrap_lo,
     }
     for name, m in flag_defs.items():
         for code, n in zip(*np.unique(vc[m], return_counts=True)):

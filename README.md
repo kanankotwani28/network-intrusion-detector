@@ -149,25 +149,97 @@ Exact versions actually installed in this environment are pinned in
 and platform) in `artifacts/run_config.json` every time a phase script
 runs.
 
-## 7. Dataset setup (required before Phase 1 can run on real data)
+## 7. Dataset provenance
 
-Download `NF-CSE-CIC-IDS2018-v2` from the official UQ dataset page
-(University of Queensland, Sarhan et al. — see the proposal's References,
-item 3) and place the CSV at the path given by `paths.raw_dataset` in
-`configs/experiment.yaml` (default: `data/raw/NF-CSE-CIC-IDS2018-v2.csv`),
-or edit that path to point at your copy. Expected format: a header row
-matching the 43 published NetFlow v9 columns plus `Label` and `Attack` (45
-columns total) — `scripts/run_pipeline.py` checks this automatically and
-reports any discrepancy to `artifacts/data/schema_verification.csv` rather
-than silently renaming or substituting columns.
+The official UQ dataset host was not reachable from this container. Instead
+the dataset was downloaded from the Kaggle mirror
+[`dhoogla/nfcsecicids2018v2`](https://www.kaggle.com/datasets/dhoogla/nfcsecicids2018v2)
+on 2026-11-25, as a single Parquet file (SHA-256 of
+`NF-CSE-CIC-IDS2018-V2.parquet`:
+`f299c8a2cb1223912438aae68f3818f898c97ce1824b2deef618f56f266562cb`, also
+recorded in `artifacts/run_config.json` on every pipeline run). This is
+verified to be the same underlying dataset, not a different one:
 
-> **This session's container has no network access to the UQ dataset host
-> or other external mirrors**, so the real file could not be downloaded
-> here. Phase 1's code is fully implemented and its unit/integration tests
-> pass against small synthetic NetFlow-shaped data — see §9 "Current status"
-> — but it has not yet been run against the genuine 18.9M-row file. Once you
-> provide the CSV (or a reachable path/URL to it), Phase 1 can be executed
-> for real and Phases 2–6 can follow.
+- **All 43 published NetFlow v9 feature names match Appendix A exactly**
+  (cross-checked programmatically against `src/nids/features/feature_groups.py`).
+- **All 15 original `Attack` label strings match Appendix B exactly**,
+  including the dataset's own misspelling `"Infilteration"`, with fully
+  consistent binary `Label` values (0 for Benign, 1 for every attack label,
+  with zero exceptions across the full 17.1M rows).
+
+Two differences from the proposal's assumptions, found empirically and
+reported rather than silently absorbed:
+
+1. **`IPV4_SRC_ADDR` and `IPV4_DST_ADDR` are absent** from this mirror
+   (privacy-stripped upstream). This is harmless for the project — both are
+   dropped as identifiers anyway — and is handled automatically (`nids.data.schema`
+   treats a missing identifier column as non-fatal; `L4_SRC_PORT`, the third
+   identifier, *is* present and is dropped as usual).
+2. **Row count is 17,129,715, not 18,893,708** (the proposal's Table 6
+   figure, from Sarhan et al., pre-deduplication). Per-class, `DoS`
+   (483,999) and `Brute-Force` (120,912) match the proposal's figures
+   *exactly*; only `Benign` and `DDoS` are lower. This is consistent with
+   this mirror having had exact-duplicate flows removed upstream — a known,
+   well-documented property of CIC-IDS2018-derived NetFlow re-exports,
+   where DDoS/Benign floods produce enormous numbers of near-identical
+   flows. The project's own deduplication step (Section 7.3) runs
+   regardless and independently confirms this: it found **zero**
+   additional conflicting-label duplicate groups in this already-cleaned
+   copy.
+
+If you obtain the original UQ CSV instead, point `paths.raw_dataset` at it
+in `configs/experiment.yaml` — the pipeline reads either CSV or Parquet
+automatically by file extension — and these two notes would no longer
+apply (though the dedup step would then likely remove far more rows, as
+anticipated by the proposal).
+
+## 7a. Two real data-quality findings from Phase 1 (empirical, not assumed)
+
+Running the empirical rate/duration identity checks (Appendix C) against
+the full real dataset surfaced two genuine findings that materially affect
+later phases. Both are handled exactly as the proposal's own fallback
+rules prescribe (Appendix C: *"If a column fails verification: hold it at
+its original value, report the failure, document the limitation — do not
+drop it from M1"*), not worked around:
+
+**(1) `FLOW_DURATION_MILLISECONDS` is corrupted for almost the entire
+dataset.** 86.1% of valid flows have this field equal to exactly `0`, and
+of the remainder, 99.1% cluster tightly around 4,294,9xx ms — i.e. almost
+exactly 2³² *microseconds* (≈4,294,967.296 ms). This is a well-documented
+32-bit counter overflow in the nProbe NetFlow exporter used to build this
+dataset, not a bug in this pipeline (independently re-verified directly
+against the raw Parquet, bypassing this project's code entirely).
+`DURATION_IN` and `DURATION_OUT` do **not** show this pattern (sane
+distributions up to ~107 seconds) and are the usable duration signals.
+`validation_drops.csv` reports the three duration columns' zero/wrap flags
+separately rather than one combined flag, specifically so this asymmetry
+is visible rather than hidden.
+
+**(2) None of the four rate/throughput columns satisfy the proposal's
+scaling-eligibility criterion.** `SRC_TO_DST_SECOND_BYTES`,
+`DST_TO_SRC_SECOND_BYTES`, `SRC_TO_DST_AVG_THROUGHPUT` and
+`DST_TO_SRC_AVG_THROUGHPUT` were each tested against every candidate
+`bytes / duration` relationship (both duration columns, both unit
+conventions); the best candidate for each column held within 5% relative
+error for at most 29.4% of positive-duration flows — far short of the 95%
+acceptance bar (full table: `artifacts/data/rate_identity_checks.csv`).
+Binned analysis shows the mismatch is *not* only the duration-corruption
+issue above (it persists even restricted to flows with sane `DURATION_OUT`
+values), so it reflects an independent quantization/rounding
+characteristic of how this exporter computes these four fields.
+**Consequence for Phase 3:** per Appendix C's documented fallback, all four
+rate/throughput columns will be held **fixed** (unperturbed) rather than
+scaled by `1/alpha` in the pacing perturbation engine — the same treatment
+as the fixed structural features. This is reported as a limitation of the
+dataset's export tooling, not of the perturbation design, and is exactly
+the kind of outcome the proposal's Empirical Honesty Protocol (Section 3)
+anticipates: it is reported plainly rather than assumed away.
+
+A third, purely mechanical finding: the five `NUM_PKTS_*` packet-size bins
+sum to `IN_PKTS + OUT_PKTS` (93.5% exact match) rather than `IN_PKTS`
+alone, so the M5 engineered `SHARE_*` ratios (Phase 4) will use
+`max(IN_PKTS + OUT_PKTS, 1)` as their denominator, per Appendix D's
+contingency rule.
 
 ## 8. Running things
 
@@ -188,19 +260,34 @@ pytest
       `lightgbm`, `shap`, `scikit-learn`, `pandas`, `numpy`, `pyarrow`,
       `matplotlib`, `pydantic`, `pyyaml`, `tqdm`, `pytest` installed and
       pinned (`requirements.lock.txt`).
-- [x] **Phase 1 — Data pipeline (code + tests).** Schema verification,
-      exact label mapping, chunked two-pass ingestion, row validation,
-      hash-based deduplication (with conflict reporting), empirical
-      rate/duration identity checks, largest-remainder sampling, and the
-      single stratified 70/30 split are all implemented
+- [x] **Phase 1 — Data pipeline. Run on the real dataset.** Schema
+      verification, exact label mapping, chunked two-pass ingestion (now
+      supporting both CSV and Parquet), row validation, hash-based
+      deduplication (with conflict reporting), empirical rate/duration
+      identity checks, largest-remainder sampling, and the single
+      stratified 70/30 split are all implemented
       (`src/nids/data/`, `src/nids/features/`, `src/nids/config/`).
-      **41 pytest tests pass** against synthetic data (`tests/`), including
-      a full end-to-end pipeline test and an unknown-label-halts test.
-      The pipeline script (`scripts/run_pipeline.py`) was additionally
-      smoke-tested on a larger synthetic CSV and correctly: excluded
-      `Bot`/`Infilteration`, deduplicated, computed exact largest-remainder
-      quotas, and produced a reproducible stratified split.
-      **Blocked on real data** — see §7.
+      **43 pytest tests pass** against synthetic data (`tests/`).
+      `scripts/run_pipeline.py` was then run on the real 17,129,715-row
+      `NF-CSE-CIC-IDS2018-v2` file (see §7 for provenance) and produced
+      every Appendix G data-stage artifact under `artifacts/data/` and
+      `data/processed/`:
+      - 16,982,667 rows eligible across the 4 project classes; **zero**
+        validation drops (NaN/Inf/negative) across the whole file; **zero**
+        unknown Attack labels; **zero** conflicting-label duplicate groups.
+      - Unique eligible rows per class after deduplication: Benign
+        8,488,924 · DDoS 114,638 · DoS 338,755 · Brute-Force 14,720.
+      - 100,000-flow sample drawn via largest-remainder quotas (Benign
+        94,774 · DDoS 1,280 · DoS 3,782 · Brute-Force 164), split 70/30 ->
+        train 70,000 / test 30,000 rows, test set has only 49 Brute-Force
+        flows (**flagged low-support**, as the proposal itself anticipated).
+      - Two genuine, proposal-relevant data-quality findings (§7a):
+        `FLOW_DURATION_MILLISECONDS` is corrupted for ~100% of flows (a
+        known nProbe 32-bit counter overflow), and none of the four
+        rate/throughput columns pass the Appendix C scaling-eligibility
+        check — both are handled per the proposal's own documented
+        fallback (hold the column fixed, report the failure), not patched
+        around.
 - [ ] Phase 2 — M1 baseline / M2 no-timing ablation.
 - [ ] Phase 3 — Consistency-preserving perturbation engine.
 - [ ] Phase 4 — M3 noise / M4 adversarial / M5 SHAP-guided hybrid.
