@@ -48,6 +48,16 @@ def test_gaussian_noise_clips_at_zero_and_stays_finite():
     assert (arr >= 0).all()
 
 
+def test_gaussian_noise_skips_column_with_infinite_std_from_outlier():
+    df = _flow_df()
+    # One pathological outlier (mirrors a real data-quality finding: some
+    # rate columns in this dataset contain astronomically large values)
+    # must not blow up std() to inf and inject unbounded noise everywhere.
+    df.loc[0, "SRC_TO_DST_SECOND_BYTES"] = 1e250
+    out = gaussian_noise_augment(df, sigma=0.10, seed=1)
+    assert np.isfinite(out["SRC_TO_DST_SECOND_BYTES"].to_numpy()).all()
+
+
 def test_adversarial_pacing_augment_doubles_attack_rows_and_scales_duration():
     df = _flow_df()
     n_attack = int((df["y"] != BENIGN_CODE).sum())

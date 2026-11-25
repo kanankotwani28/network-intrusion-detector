@@ -33,7 +33,12 @@ def gaussian_noise_augment(train_df: pd.DataFrame, sigma: float, seed: int, labe
     stds = train_df[NOISE_FEATURES].std(axis=0, ddof=0)
     for col in NOISE_FEATURES:
         s = float(stds[col])
-        if s <= 0:
+        # A handful of pathological outliers in the rate/throughput columns
+        # (Phase 1: these columns are already known to be unreliable in this
+        # dataset -- see README 7a) can make the raw standard deviation
+        # overflow to inf; such a column is held fixed, exactly like a
+        # genuinely zero-variance one, rather than injecting unbounded noise.
+        if not np.isfinite(s) or s <= 0:
             continue
         eps = rng.normal(loc=0.0, scale=sigma * s, size=len(noisy))
         noisy[col] = np.clip(noisy[col].to_numpy(dtype=np.float64) + eps, a_min=0.0, a_max=None)

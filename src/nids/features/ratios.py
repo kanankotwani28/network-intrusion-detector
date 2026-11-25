@@ -50,3 +50,13 @@ def compute_ratios(df: pd.DataFrame, bin_denominator: BinDenominator = "in_out_p
     assert np.isfinite(out.to_numpy()).all(), "engineered ratios must never be NaN/Inf"
     assert (out.to_numpy() >= -1e-9).all(), "engineered ratios must never be negative"
     return out
+
+
+def attach_ratios(df: pd.DataFrame, bin_denominator: BinDenominator = "in_out_pkts") -> pd.DataFrame:
+    """Return a copy of ``df`` with the 8 engineered ratio columns attached
+    (overwriting them if already present). Any M5 code path must call this
+    before training/predicting, since Phase 1's raw sample/train/test
+    frames do not carry these M5-only columns by default."""
+    out = df.copy(deep=True)
+    out[ENGINEERED_FEATURES] = compute_ratios(df, bin_denominator=bin_denominator)
+    return out
