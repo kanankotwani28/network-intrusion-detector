@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Data and generated outputs (never committed: large and reproducible)
+data/raw/*
+data/interim/*
+data/processed/*
+artifacts/*
+runs/
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!artifacts/.gitkeep
+
+# Notebook checkpoints
+.ipynb_checkpoints/

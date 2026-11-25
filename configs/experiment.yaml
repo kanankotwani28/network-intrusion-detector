@@ -1,0 +1,58 @@
+# Central experiment configuration. All values here are proposal-specified
+# (Appendix F) unless marked "engineering decision". Relative paths are
+# resolved against the repository root (the parent of this configs/ folder).
+
+run_name: final
+
+paths:
+  raw_dataset: data/raw/NF-CSE-CIC-IDS2018-v2.csv   # place the downloaded CSV here (or edit)
+  interim_dir: data/interim
+  processed_dir: data/processed
+  artifacts_dir: artifacts
+
+data:
+  chunksize: 200000
+  sample_size: 100000
+  sampling_seed: 42
+  split_seed: 42
+  test_size: 0.30
+  # Halt if conflicting-label duplicate rows exceed this share of unique rows
+  # (proposal 7.3: "investigated before proceeding").
+  conflict_rate_threshold: 0.01
+  halt_on_conflict_threshold: true
+  # Stop if the file contains Attack labels not listed in Appendix B.
+  halt_on_unknown_labels: true
+  # Engineering decision: SHA-256 of the raw file for run_config.json
+  # (one extra sequential read; disable on very slow disks).
+  compute_checksum: true
+
+identity_checks:
+  # Appendix C acceptance rule for scaling a rate column by 1/alpha.
+  relative_tolerance: 0.05
+  min_pass_rate: 0.95
+
+model:
+  # Proposal Appendix F. Identical for M1-M5; random_state is set per seed.
+  params:
+    n_estimators: 300
+    learning_rate: 0.1
+    num_leaves: 31
+    subsample: 0.8
+    subsample_freq: 1
+    colsample_bytree: 0.8
+    class_weight: balanced
+    n_jobs: -1
+    verbose: -1
+
+experiment:
+  seeds: [42, 101, 202, 303, 404]
+  noise_sigma: 0.10
+  alpha_train: [1.5, 2.5]
+  alpha_moderate: [1.5, 2.5]
+  alpha_ood: [3.0, 4.5]
+  shap_threshold: 0.025          # 1/p with p = 40
+  shap_sensitivity_thresholds: [0.01, 0.05]
+  shap_selection_cap_per_class: 2500
+  shap_audit_cap_per_class: 300
+  shap_audit_min_evaded: 30
+  low_support_threshold: 200
